@@ -1,0 +1,43 @@
+{
+  "name": "model-frontier",
+  "version": "0.1.0",
+  "description": "Pareto frontier of AI models by benchmark score vs price or speed, from Artificial Analysis or LMArena",
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "bin": {
+    "model-frontier": "bin/cli.js"
+  },
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "keywords": [
+    "llm",
+    "benchmarks",
+    "pareto-frontier",
+    "artificial-analysis",
+    "lmarena"
+  ],
+  "scripts": {
+    "test": "node --test"
+  },
+  "license": "MIT",
+  "author": "Jonas Schneider",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/el-schneider/model-frontier.git"
+  },
+  "homepage": "https://github.com/el-schneider/model-frontier#readme",
+  "bugs": "https://github.com/el-schneider/model-frontier/issues",
+  "publishConfig": {
+    "access": "public"
+  }
+}

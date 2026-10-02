@@ -1,0 +1,6 @@
+node_modules/
+*.tgz
+.env*
+.npmrc
+.pi/
+.pi-subagents/

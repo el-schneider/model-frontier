@@ -1,0 +1,29 @@
+# Publishes to npm when a GitHub release is published.
+# Auth: npm trusted publishing (OIDC), no token secret. Configure once at
+# https://www.npmjs.com/package/model-frontier/access -> Trusted publisher:
+# repo el-schneider/model-frontier, workflow publish.yml.
+name: Publish
+on:
+  release:
+    types: [published]
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - run: npm install -g npm@latest
+      - name: Tag must match package.json version
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          pkg="v$(node -p "require('./package.json').version")"
+          test "$pkg" = "$TAG" || { echo "tag $TAG != $pkg"; exit 1; }
+      - run: npm test
+      - run: npm publish --provenance
