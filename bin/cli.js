@@ -5,7 +5,7 @@ import { loadModels, rank, format, checkOptions, defaultSource } from '../src/in
 
 try {
   const { values, positionals } = parseArgs({ allowPositionals: true, options: {
-    source: { type: 'string' }, metric: { type: 'string' }, by: { type: 'string' }, models: { type: 'string' },
+    source: { type: 'string' }, metric: { type: 'string' }, by: { type: 'string' }, models: { type: 'string' }, 'min-score': { type: 'string' },
     json: { type: 'boolean' }, offline: { type: 'boolean' }, help: { type: 'boolean', short: 'h' }, version: { type: 'boolean', short: 'v' },
   } });
   if (values.version) {
@@ -25,8 +25,16 @@ EXAMPLES
   Best value for money:
     model-frontier
 
-  Coding score instead of intelligence (unscored new models listed separately):
+  Coding score instead of intelligence:
     model-frontier --metric coding
+  Coding scores lag new releases. Strong new models without one are listed separately
+  (JSON: notYetScored[]); mention them, they may beat the scored ones.
+
+  Compare two models (the beaten one is listed with the reason):
+    model-frontier --models claude-fable-5.1,claude-opus-5.5
+
+  Cheapest per benchmark task at intelligence 45 or higher (first row):
+    model-frontier --by task-cost --min-score 45
 
   Fastest model at each score level (subscriptions, where price per token matters less):
     model-frontier --by speed
@@ -38,7 +46,10 @@ OPTIONS
   --metric intelligence|coding   AA score; default intelligence. LMArena has only its Elo
   --by price|task-cost|speed     Cost axis; default price (blended 3:1 input:output per 1M tokens).
                                  task-cost = AA's cost per benchmark task, includes token use
-  --models id,id                 Restrict to these models; provider prefixes and effort variants match
+  --models id,id                 Restrict to these models; provider prefixes and effort variants match.
+                                 Requested models off the frontier are listed with the reason
+                                 (JSON: excluded[], with dominatedBy when another model beats them)
+  --min-score N                  Drop models scoring below N on the ranked metric
   --source aa|arena              Default aa when a key is set, else arena
   --offline                      Cached data only, even if stale
   --json                         One JSON object on stdout
@@ -50,7 +61,8 @@ Exit codes: 0 = results, 1 = error (stderr), 2 = no rankable models.`);
     if (positionals.length > 1 || (positionals[0] && positionals[0] !== 'refresh')) throw Error('Expected no command or refresh; see --help');
     const models = values.models?.split(',').map(id => id.trim());
     const source = values.source ?? defaultSource();
-    const options = { metric: values.metric, by: values.by, models };
+    const raw = values['min-score'];
+    const options = { metric: values.metric, by: values.by, models, minScore: raw === undefined ? undefined : raw.trim() ? Number(raw) : NaN };
     checkOptions(source, options);
     const snapshot = await loadModels({ source, refresh: positionals[0] === 'refresh', offline: values.offline });
     const result = rank(snapshot, options);

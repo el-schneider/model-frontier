@@ -48,11 +48,12 @@ model-frontier --metric coding       # coding score; unscored new models listed 
 model-frontier --by speed            # fastest model at each score level
 model-frontier --by task-cost        # AA's cost per benchmark task, which includes token use
 model-frontier --models gpt-6.1-sol,openai-codex/gpt-6-luna   # only these, all effort variants
+model-frontier --by task-cost --min-score 45   # cheapest per task at intelligence 45 or higher
 model-frontier --json                # for scripts and agents
 model-frontier refresh               # re-fetch now
 ```
 
-Price is the blended price per 1M tokens (3:1 input to output). Coding scores lag new releases, so `--metric coding` also lists unscored models that would extend the frontier on intelligence.
+Price is the blended price per 1M tokens (3:1 input to output). Coding scores lag new releases, so `--metric coding` also lists unscored models that would extend the frontier on intelligence. With `--models`, a requested model that is not on the frontier is listed with the reason, for example the model that beats it (`excluded[]` in JSON).
 
 Only the models you can use, for example in [pi](https://pi.dev):
 

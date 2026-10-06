@@ -73,6 +73,43 @@ test('--models accepts provider-qualified IDs, matches effort variants only, and
   assert.deepEqual(rank(s, { models: ['gpt-6', 'claude-nope'] }).unmatched, ['claude-nope']);
 });
 
+test('--models explains every requested model left off the frontier', () => {
+  const s = snapshot([row('cheap', { intelligence: 50, coding: 40, price: 1 }), row('pricier', { intelligence: 45, coding: 50, price: 4 }), row('weak', { intelligence: 10, coding: 5, price: 0.5 }),
+    row('unpriced', { intelligence: 60 }), row('new', { intelligence: 55, price: 2 }), row('other', { intelligence: 99, price: 0.1 }),
+    row('gpt-x-low', { intelligence: 20, price: 9 }), row('gpt-x-high', { intelligence: 70, price: 9 }), row('gpt-y-low', { intelligence: 30, price: 9 }), row('gpt-y-high', { intelligence: 40, price: 9 })]);
+  const why = options => Object.fromEntries(rank(s, options).excluded.map(e => [e.id, [e.reason, e.dominatedBy]]));
+  const all = ['cheap', 'pricier', 'weak', 'unpriced', 'new'];
+  assert.deepEqual(why({ models: all, minScore: 20 }), {
+    pricier: ['Beaten by cheap: scores at least as high at no higher cost', 'cheap'],
+    weak: ['Below minimum score 20', null],
+    unpriced: ['No price data', null],
+  });
+  assert.equal(rank(s, { models: all }).excluded.find(e => e.id === 'weak'), undefined);
+  assert.deepEqual(why({ models: all, metric: 'coding' }).new, ['No coding score', null]);
+  assert.deepEqual(rank(s, {}).excluded, []);
+  assert.deepEqual(rank(s, { models: ['cheap'] }).excluded, []);
+  assert.match(format(rank(s, { models: all })), /Not on the frontier:\n {2}pricier: Beaten by cheap/);
+  // One entry per requested model, for its strongest variant; variants of a model on the frontier are not listed.
+  const variants = rank(s, { models: ['gpt-x', 'gpt-y', 'cheap'] }).excluded;
+  assert.deepEqual(variants.map(e => [e.query, e.id, e.dominatedBy]), [['gpt-y', 'gpt-y-high', 'cheap']]);
+  assert.equal(rank(s, { models: ['cheap', 'pricier', 'pricier'] }).excluded.length, 1);
+  const fast = snapshot([row('quick', { intelligence: 50, speed: 200 }), row('slow', { intelligence: 40, speed: 100 })]);
+  assert.deepEqual(rank(fast, { models: ['quick', 'slow'], by: 'speed' }).excluded.map(e => [e.id, e.reason]), [['slow', 'Beaten by quick: scores at least as high and is at least as fast']]);
+});
+
+test('--min-score drops models below the floor on the ranked metric', () => {
+  const s = snapshot([row('a', { intelligence: 30, price: 1 }), row('b', { intelligence: 50, price: 2 }), row('c', { intelligence: 60, price: 3 })]);
+  assert.deepEqual(rank(s, { minScore: 45 }).models.map(m => m.id), ['b', 'c']);
+  assert.equal(rank(s, { minScore: 45 }).ranked, 2);
+  assert.throws(() => checkOptions('aa', { minScore: Number('x') }), /min-score/);
+});
+
+test('the table keeps three significant digits so close prices stay distinct', () => {
+  const s = snapshot([row('a', { intelligence: 40, price: 0.0275, taskCost: 0.131, speed: 50 }), row('b', { intelligence: 45, price: 0.54, taskCost: 0.1332, speed: 50 }), row('c', { intelligence: 50, price: 20, taskCost: 123.4, speed: 50 })]);
+  const text = format(rank(s, { by: 'task-cost' }));
+  for (const value of ['0.0275', '0.131', '0.540', '0.133', '20.0', '123']) assert.ok(text.includes(` ${value}`), value);
+});
+
 test('options a source cannot answer fail before any request', () => {
   assert.throws(() => checkOptions('arena', { by: 'speed' }), /needs ARTIFICIAL_ANALYSIS_API_KEY/);
   assert.throws(() => checkOptions('arena', { metric: 'coding' }), /needs ARTIFICIAL_ANALYSIS_API_KEY/);
