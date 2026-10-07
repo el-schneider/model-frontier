@@ -25,6 +25,10 @@ export const defaultSource = () => process.env.ARTIFICIAL_ANALYSIS_API_KEY ? 'aa
 export const cachePath = source => join(process.env.XDG_CACHE_HOME ?? join(homedir(), '.cache'), 'model-frontier', `${source}.json`);
 
 const normalize = id => id.toLowerCase().replace(/[._]/g, '-');
+const providerName = name => {
+  const normalized = name.trim().toLowerCase();
+  return normalized === 'spacexai' ? 'xai' : normalized;
+};
 // Effort, thinking-budget ("-32k") and date ("-20250929", "-2025-04-14") suffixes name a variant of the same model;
 // any other suffix ("-mini", "-5-max") is a different model.
 const variant = /^(-(minimal|low|medium|high|xhigh|max|thinking|reasoning|non-reasoning|adaptive|\d+k|\d{4}-\d{2}-\d{2}|\d{4}|\d{8}))*( \([^)]*\))?$/;
@@ -169,7 +173,7 @@ export function frontier(rows, { score, cost }) {
 const axes = { price: r => r.price, 'task-cost': r => r.taskCost, speed: r => r.speed === null ? null : -r.speed };
 
 // Separate from rank so callers can reject bad options before spending API requests.
-export function checkOptions(sourceId, { metric, by = 'price', models: queries, minScore, margin = 0 } = {}) {
+export function checkOptions(sourceId, { metric, by = 'price', models: queries, minScore, margin = 0, provider } = {}) {
   const source = sources[sourceId];
   if (!source) throw Error(`Unknown source: ${sourceId} (expected aa or arena)`);
   metric ??= source.metrics[0];
@@ -179,13 +183,16 @@ export function checkOptions(sourceId, { metric, by = 'price', models: queries, 
   if (queries !== undefined && (!Array.isArray(queries) || queries.some(q => typeof q !== 'string' || !q.trim()))) throw Error('models must be non-empty IDs');
   if (minScore !== undefined && !Number.isFinite(minScore)) throw Error('min-score must be a number');
   if (!Number.isFinite(margin) || margin < 0) throw Error('margin must be a non-negative number');
-  return { metric, by, queries, minScore, margin };
+  if (provider !== undefined && (typeof provider !== 'string' || provider.split(',').some(name => !name.trim() || /[\x00-\x1f\x7f-\x9f]/.test(name.trim())))) throw Error('provider must be a comma-separated list of non-empty model maker names');
+  return { metric, by, queries, minScore, margin, ...(provider === undefined ? {} : { provider: [...new Set(provider.split(',').map(providerName))].join(',') }) };
 }
 
 export function rank(snapshot, options = {}) {
   const source = sources[snapshot.source];
-  const { metric, by, queries, minScore, margin } = checkOptions(snapshot.source, options);
-  const rows = queries ? snapshot.models.filter(r => queries.some(q => matches(q, r.id))) : snapshot.models;
+  const { metric, by, queries, minScore, margin, provider } = checkOptions(snapshot.source, options);
+  const providers = provider?.split(',');
+  const rows = snapshot.models.filter(r => (!providers || (typeof r.creator === 'string' && providers.includes(providerName(r.creator))))
+    && (!queries || queries.some(q => matches(q, r.id))));
   const cost = axes[by];
   const scored = rows.filter(r => minScore === undefined || !(r.scores[metric] < minScore));
   const front = frontier(scored, { score: r => r.scores[metric], cost });
@@ -220,14 +227,14 @@ export function rank(snapshot, options = {}) {
   return {
     source: snapshot.source,
     attribution: source.attribution,
-    metric, by, margin,
+    metric, by, margin, ...(provider === undefined ? {} : { provider }),
     fetchedAt: snapshot.fetchedAt,
     stale: Date.now() - snapshot.fetchedAt >= ttl,
     models: front.map(view),
     alternatives: alternatives.map(r => ({ ...view(r), alternativeTo: r.alternativeTo, scoreGap: r.scoreGap })),
     notYetScored: notYetScored.map(view),
     excluded,
-    unmatched: queries?.filter(q => !snapshot.models.some(r => matches(q, r.id))) ?? [],
+    unmatched: queries?.filter(q => !rows.some(r => matches(q, r.id))) ?? [],
     ranked: scored.filter(r => Number.isFinite(r.scores[metric]) && Number.isFinite(cost(r))).length,
   };
 }
@@ -246,7 +253,7 @@ export function format(result, { style = (_, text) => text } = {}) {
     return all.map(row => row.map((cell, col) => col < 2 ? cell.padEnd(widths[col]) : cell.padStart(widths[col])).join('  ').trimEnd());
   };
   const lines = [
-    `${style('bold', `Frontier: ${labels[result.metric]} vs ${labels[result.by]}`)} ${style('dim', `· ${sources[result.source].name}`)}`,
+    `${style('bold', `Frontier: ${labels[result.metric]} vs ${labels[result.by]}`)} ${style('dim', `· ${sources[result.source].name}${result.provider ? ` · provider: ${result.provider}` : ''}`)}`,
     style('dim', result.by === 'speed' ? 'Each numbered row is slower and scores higher than the one above.' : 'Each numbered row costs more and scores higher than the one above.'),
   ];
   const alternatives = result.alternatives ?? [];

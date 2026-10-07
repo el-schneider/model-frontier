@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.0
+
+- `--provider NAME,NAME` filters one or more model makers before ranking on a shared frontier, with exact case-insensitive matching. It combines with `--models` and applies to alternatives and missing-score candidates too. `SpaceXAI` matches `xai`. JSON `provider` is the normalized list when filtering; library callers can pass `{ provider }`. A selection with no rankable models exits with code 2.
+
 ## 0.3.0
 
 - The CLI shows close contenders by default: up to three dimmed alternatives per frontier row within 5 Artificial Analysis points or 50 Arena Elo in the same cost/speed tier. `--margin N` adjusts this; `--margin 0` keeps the strict frontier. JSON: `alternatives[]` with `alternativeTo` and `scoreGap`. Library ranking stays strict unless a margin is supplied.

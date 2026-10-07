@@ -5,7 +5,7 @@ import { loadModels, rank, format, checkOptions, defaultSource } from '../src/in
 
 try {
   const { values, positionals } = parseArgs({ allowPositionals: true, options: {
-    source: { type: 'string' }, metric: { type: 'string' }, by: { type: 'string' }, models: { type: 'string' }, 'min-score': { type: 'string' }, margin: { type: 'string' },
+    source: { type: 'string' }, provider: { type: 'string' }, metric: { type: 'string' }, by: { type: 'string' }, models: { type: 'string' }, 'min-score': { type: 'string' }, margin: { type: 'string' },
     json: { type: 'boolean' }, offline: { type: 'boolean' }, help: { type: 'boolean', short: 'h' }, version: { type: 'boolean', short: 'v' },
   } });
   if (values.version) {
@@ -30,6 +30,10 @@ EXAMPLES
   Coding scores lag new releases. Strong new models without one are listed separately
   (JSON: notYetScored[]); mention them, they may beat the scored ones.
 
+  Compare models from one maker:
+    model-frontier --provider xai
+    model-frontier --provider openai,anthropic
+
   Compare two models (the beaten one is listed with the reason):
     model-frontier --models claude-fable-5.1,claude-opus-5.5
 
@@ -43,6 +47,8 @@ EXAMPLES
     model-frontier --models "$(pi --list-models | awk 'NR>1 {print $2}' | paste -sd, -)"
 
 OPTIONS
+  --provider NAME,NAME           Only these model makers (e.g. openai,anthropic or xai).
+                                 Exact, case-insensitive creator match (SpaceXAI = xai); not a hosting service
   --metric intelligence|coding   AA score; default intelligence. LMArena has only its Elo
   --by price|task-cost|speed     Cost axis; default price (blended 3:1 input:output per 1M tokens).
                                  task-cost = AA's cost per benchmark task, includes token use
@@ -66,7 +72,7 @@ Exit codes: 0 = results, 1 = error (stderr), 2 = no rankable models.`);
     const source = values.source ?? defaultSource();
     const raw = values['min-score'];
     const margin = values.margin;
-    const options = { metric: values.metric, by: values.by, models, minScore: raw === undefined ? undefined : raw.trim() ? Number(raw) : NaN,
+    const options = { provider: values.provider, metric: values.metric, by: values.by, models, minScore: raw === undefined ? undefined : raw.trim() ? Number(raw) : NaN,
       margin: margin === undefined ? source === 'arena' ? 50 : 5 : margin.trim() ? Number(margin) : NaN };
     checkOptions(source, options);
     const snapshot = await loadModels({ source, refresh: positionals[0] === 'refresh', offline: values.offline });

@@ -47,6 +47,8 @@ Each user brings their own key; it is only sent to Artificial Analysis. Data is 
 ```sh
 model-frontier                       # intelligence vs price
 model-frontier --metric coding       # coding score; unscored new models listed separately
+model-frontier --provider xai        # compare only xAI models
+model-frontier --provider openai,anthropic   # compare both makers on one frontier
 model-frontier --by speed            # fastest model at each score level
 model-frontier --by task-cost        # AA's cost per benchmark task, which includes token use
 model-frontier --models gpt-6.1-sol,openai-codex/gpt-6-luna   # only these, all effort variants
@@ -59,6 +61,8 @@ model-frontier refresh               # re-fetch now
 ```
 
 Price is the blended price per 1M tokens (3:1 input to output). Coding scores lag new releases, so `--metric coding` also lists unscored models that would extend the frontier on intelligence. `--min-score` remains a hard floor for alternatives too. Speed uses speed tiers instead of cost tiers. Above the final frontier row, only alternatives at that row's cost (or speed) are shown. With `--models`, a requested model not shown on the frontier or as an alternative is listed with the reason, for example the model that beats it (`excluded[]` in JSON). JSON keeps the strict frontier in `models[]` and contenders in `alternatives[]`, each with `alternativeTo` and `scoreGap`.
+
+`--provider` means the model maker, not a hosting service such as OpenRouter. Supply one name or a comma-separated list. Names match the source's creator name exactly, ignoring case and surrounding whitespace. Embedded control characters and blank list elements are rejected. Selected makers compete on one frontier, calculated after filtering. It intersects with `--models`; requested IDs outside the selected makers are reported as unmatched. The known `SpaceXAI` creator name in AA is treated as `xai`, so that filter works with both sources. Other names follow each source's catalog. Unknown makers match no models; if the selection has no rankable models, the CLI exits with code 2. When filtering, JSON `provider` carries the normalized, de-duplicated lowercase list, such as `"openai,anthropic"`; unfiltered results omit that field. The last numbered frontier row has the highest score among rankable models in the selection.
 
 Only the models you can use, for example in [pi](https://pi.dev):
 
@@ -76,7 +80,7 @@ import { loadModels, rank, frontier, matches } from 'model-frontier';
 const result = rank(await loadModels());   // LMArena without a key, Artificial Analysis with one
 ```
 
-Library ranking remains strict by default; pass `rank(snapshot, { margin: 5 })` to include alternatives. The CLI supplies its source-specific default margin. `frontier(rows, { score, cost })` is the generic Pareto filter, for your own cost model.
+Library `rank` and `checkOptions` accept `{ provider: 'openai,anthropic' }` with the same filtering and validation as the CLI. Library ranking remains strict by default; pass `rank(snapshot, { margin: 5 })` to include alternatives. The CLI supplies its source-specific default margin. `frontier(rows, { score, cost })` is the generic Pareto filter, for your own cost model.
 
 ## Attribution
 

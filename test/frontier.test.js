@@ -258,6 +258,80 @@ test('CLI defaults to close contenders on each source and accepts strict or expl
   }
 });
 
+test('provider filters model makers before frontier, alternatives and missing-score ranking', () => {
+  const s = snapshot([
+    { ...row('other', { intelligence: 90, coding: 90, price: 0.5 }), creator: 'OpenAI' },
+    { ...row('grok-small', { intelligence: 40, coding: 40, price: 1 }), creator: 'xAI' },
+    { ...row('grok-close', { intelligence: 38, coding: 38, price: 1 }), creator: 'xAI' },
+    { ...row('grok-new', { intelligence: 60, price: 2 }), creator: 'SpaceXAI' },
+    { ...row('unknown-maker', { intelligence: 99, price: 0.1 }), creator: null },
+  ]);
+  const result = rank(s, { provider: ' XAI ', metric: 'coding', margin: 5 });
+  assert.equal(result.provider, 'xai');
+  assert.deepEqual(rank(s, { provider: 'SpaceXAI' }).models.map(m => m.id), ['grok-small', 'grok-new']);
+  assert.deepEqual(result.models.map(m => m.id), ['grok-small']);
+  assert.deepEqual(result.alternatives.map(m => m.id), ['grok-close']);
+  assert.deepEqual(result.notYetScored.map(m => m.id), ['grok-new']);
+  assert.equal(result.ranked, 2);
+  assert.match(format(result), /provider: xai/);
+  const selected = rank(s, { provider: 'xai', models: ['grok-small', 'other'] });
+  assert.deepEqual(selected.models.map(m => m.id), ['grok-small']);
+  assert.deepEqual(selected.unmatched, ['other']);
+  assert.deepEqual(rank(s, { provider: 'openrouter' }).models, []);
+  assert.deepEqual(rank(s, { provider: 'ai' }).models, [], 'maker matching is exact, not a substring');
+  const arena = snapshot(s.models.map(m => ({ ...m, creator: m.creator?.toLowerCase() ?? null, scores: { arena: m.scores.intelligence } })), 'arena');
+  assert.deepEqual(rank(arena, { provider: 'xAI' }).models.map(m => m.id), ['grok-small', 'grok-new']);
+  assert.equal(checkOptions('aa', { provider: '\txai\n' }).provider, 'xai');
+  assert.equal(Object.hasOwn(checkOptions('aa'), 'provider'), false);
+  assert.equal(Object.hasOwn(rank(s), 'provider'), false);
+  for (const provider of ['', ' ', 1, null, 'x\nai', 'x\x85ai']) assert.throws(() => checkOptions('aa', { provider }), /provider/);
+});
+
+test('multiple providers share one frontier and intersect model IDs', () => {
+  const s = snapshot([
+    { ...row('gpt', { intelligence: 40, price: 1 }), creator: 'OpenAI' },
+    { ...row('claude', { intelligence: 50, price: 2 }), creator: 'Anthropic' },
+    { ...row('claude-close', { intelligence: 48, price: 2 }), creator: 'Anthropic' },
+    { ...row('grok', { intelligence: 90, price: 0.1 }), creator: 'xAI' },
+  ]);
+  const result = rank(s, { provider: '\tOpenAI,\n ANTHROPIC,openai\n ', margin: 5 });
+  assert.equal(result.provider, 'openai,anthropic');
+  assert.deepEqual(result.models.map(m => m.id), ['gpt', 'claude']);
+  assert.deepEqual(result.alternatives.map(m => m.id), ['claude-close']);
+  assert.equal(result.ranked, 3);
+  assert.deepEqual(rank(s, { provider: 'openai,xai' }).models.map(m => m.id), ['grok'], 'selected makers compete on one frontier');
+  const selected = rank(s, { provider: 'openai,anthropic', models: ['gpt', 'grok'] });
+  assert.deepEqual(selected.models.map(m => m.id), ['gpt']);
+  assert.deepEqual(selected.unmatched, ['grok']);
+  assert.equal(checkOptions('aa', { provider: 'xai,SpaceXAI' }).provider, 'xai');
+  for (const provider of ['openai,', ',anthropic', 'openai,,anthropic', 'openai, ']) assert.throws(() => checkOptions('aa', { provider }), /provider/);
+});
+
+test('CLI provider option filters both sources and rejects empty input before loading data', async t => {
+  const dir = await temp(t);
+  await mkdir(join(dir, 'model-frontier'));
+  for (const source of ['aa', 'arena']) {
+    const models = [{ ...row('grok', { intelligence: 40, price: 1 }), creator: 'xAI' },
+      { ...row('other', { intelligence: 90, price: 0.1 }), creator: 'OpenAI' }];
+    if (source === 'arena') for (const m of models) m.scores = { arena: m.scores.intelligence };
+    await writeFile(join(dir, 'model-frontier', `${source}.json`), JSON.stringify(snapshot(models, source)));
+    const run = args => spawnSync(process.execPath, [cli, '--source', source, '--offline', ...args], { encoding: 'utf8', env: { PATH: process.env.PATH, XDG_CACHE_HOME: dir } });
+    const out = run(['--provider', 'XAI', '--json']);
+    assert.equal(out.status, 0, out.stderr);
+    assert.deepEqual(JSON.parse(out.stdout).models.map(m => m.id), ['grok']);
+    assert.match(run(['--provider', 'xai']).stdout, /provider: xai/);
+    assert.equal(run(['--provider', 'not-a-maker']).status, 2);
+    const multiple = run(['--provider', ' XAI, OpenAI ', '--json']);
+    assert.equal(multiple.status, 0, multiple.stderr);
+    assert.equal(JSON.parse(multiple.stdout).provider, 'xai,openai');
+    assert.deepEqual(JSON.parse(multiple.stdout).models.map(m => m.id), ['other']);
+    assert.equal(run(['--provider', 'xai,']).status, 1);
+  }
+  const bad = spawnSync(process.execPath, [cli, '--provider=', '--json'], { encoding: 'utf8', env: { PATH: process.env.PATH, XDG_CACHE_HOME: await temp(t) } });
+  assert.equal(bad.status, 1);
+  assert.match(JSON.parse(bad.stderr).error, /provider/);
+});
+
 test('a corrupt cache fails loudly instead of being silently replaced', async t => {
   const cache = join(await temp(t), 'aa.json');
   await writeFile(cache, JSON.stringify({ version: 1, source: 'aa', fetchedAt: Date.now(), models: [{ id: 'x' }] }));
