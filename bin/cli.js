@@ -5,7 +5,7 @@ import { loadModels, rank, format, checkOptions, defaultSource } from '../src/in
 
 try {
   const { values, positionals } = parseArgs({ allowPositionals: true, options: {
-    source: { type: 'string' }, metric: { type: 'string' }, by: { type: 'string' }, models: { type: 'string' }, 'min-score': { type: 'string' },
+    source: { type: 'string' }, metric: { type: 'string' }, by: { type: 'string' }, models: { type: 'string' }, 'min-score': { type: 'string' }, margin: { type: 'string' },
     json: { type: 'boolean' }, offline: { type: 'boolean' }, help: { type: 'boolean', short: 'h' }, version: { type: 'boolean', short: 'v' },
   } });
   if (values.version) {
@@ -14,7 +14,7 @@ try {
     console.log(`model-frontier [refresh] [options]
 
 Lists the models no other model beats on both score and cost (or speed):
-the Pareto frontier, cheapest first. No inference calls.
+the Pareto frontier, cheapest first, plus close contenders. No inference calls.
 
 SOURCES
   With ARTIFICIAL_ANALYSIS_API_KEY set (free at https://artificialanalysis.ai):
@@ -50,6 +50,9 @@ OPTIONS
                                  Requested models off the frontier are listed with the reason
                                  (JSON: excluded[], with dominatedBy when another model beats them)
   --min-score N                  Drop models scoring below N on the ranked metric
+  --margin N                     Show up to three alternatives per frontier row within N score points
+                                 in the same cost/speed tier. Default 5 AA points or 50 Arena Elo;
+                                 these are heuristics, not confidence intervals. 0 = strict frontier
   --source aa|arena              Default aa when a key is set, else arena
   --offline                      Cached data only, even if stale
   --json                         One JSON object on stdout
@@ -62,7 +65,9 @@ Exit codes: 0 = results, 1 = error (stderr), 2 = no rankable models.`);
     const models = values.models?.split(',').map(id => id.trim());
     const source = values.source ?? defaultSource();
     const raw = values['min-score'];
-    const options = { metric: values.metric, by: values.by, models, minScore: raw === undefined ? undefined : raw.trim() ? Number(raw) : NaN };
+    const margin = values.margin;
+    const options = { metric: values.metric, by: values.by, models, minScore: raw === undefined ? undefined : raw.trim() ? Number(raw) : NaN,
+      margin: margin === undefined ? source === 'arena' ? 50 : 5 : margin.trim() ? Number(margin) : NaN };
     checkOptions(source, options);
     const snapshot = await loadModels({ source, refresh: positionals[0] === 'refresh', offline: values.offline });
     const result = rank(snapshot, options);

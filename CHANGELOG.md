@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.0
+
+- The CLI shows close contenders by default: up to three dimmed alternatives per frontier row within 5 Artificial Analysis points or 50 Arena Elo in the same cost/speed tier. `--margin N` adjusts this; `--margin 0` keeps the strict frontier. JSON: `alternatives[]` with `alternativeTo` and `scoreGap`. Library ranking stays strict unless a margin is supplied.
+
 ## 0.2.0
 
 - `--models`: a requested model that is not on the frontier is now listed with the reason, such as the model that beats it, instead of being left out silently. JSON: `excluded[]`.

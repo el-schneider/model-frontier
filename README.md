@@ -1,16 +1,18 @@
 # model-frontier
 
-Which AI model gives the most for the money? `model-frontier` lists the Pareto frontier: the models that no other model beats on both benchmark score and price. Every model it leaves out has a listed model that scores at least as high for less.
+Which AI model gives the most for the money? `model-frontier` lists the Pareto frontier: the models that no other model beats on both benchmark score and price. It also shows close contenders beneath each frontier model: up to three alternatives within 5 Artificial Analysis points or 50 Arena Elo in the same cost tier. These margins are heuristics, not confidence intervals. Every omitted rankable model is beaten or matched on score and cost by a listed model.
 
 ```
 $ model-frontier
 
 Frontier: LMArena Elo vs $ per 1M tokens · LMArena WebDev
-Each row costs more and scores higher than the one above.
+Each numbered row costs more and scores higher than the one above.
+Indented: alternatives within 50 points in the same cost tier (up to three per row).
 
 #  MODEL                    SCORE   $/1M
 1  solar-pro4                1370  0.052
 2  deepseek-v4-flash-high    1581   0.18
+     gpt-6-luna-max          1579   0.20
 3  glm-5.3-flash             1616   0.24
 ...
 8  claude-opus-5.5-max       1815   8.00
@@ -49,11 +51,14 @@ model-frontier --by speed            # fastest model at each score level
 model-frontier --by task-cost        # AA's cost per benchmark task, which includes token use
 model-frontier --models gpt-6.1-sol,openai-codex/gpt-6-luna   # only these, all effort variants
 model-frontier --by task-cost --min-score 45   # cheapest per task at intelligence 45 or higher
+model-frontier --margin 0            # strict frontier, no alternatives
+model-frontier --source aa --margin 3       # 3 AA points (requires a key)
+model-frontier --source arena --margin 20   # 20 Arena Elo
 model-frontier --json                # for scripts and agents
 model-frontier refresh               # re-fetch now
 ```
 
-Price is the blended price per 1M tokens (3:1 input to output). Coding scores lag new releases, so `--metric coding` also lists unscored models that would extend the frontier on intelligence. With `--models`, a requested model that is not on the frontier is listed with the reason, for example the model that beats it (`excluded[]` in JSON).
+Price is the blended price per 1M tokens (3:1 input to output). Coding scores lag new releases, so `--metric coding` also lists unscored models that would extend the frontier on intelligence. `--min-score` remains a hard floor for alternatives too. Speed uses speed tiers instead of cost tiers. Above the final frontier row, only alternatives at that row's cost (or speed) are shown. With `--models`, a requested model not shown on the frontier or as an alternative is listed with the reason, for example the model that beats it (`excluded[]` in JSON). JSON keeps the strict frontier in `models[]` and contenders in `alternatives[]`, each with `alternativeTo` and `scoreGap`.
 
 Only the models you can use, for example in [pi](https://pi.dev):
 
@@ -71,7 +76,7 @@ import { loadModels, rank, frontier, matches } from 'model-frontier';
 const result = rank(await loadModels());   // LMArena without a key, Artificial Analysis with one
 ```
 
-`frontier(rows, { score, cost })` is the generic Pareto filter, for your own cost model.
+Library ranking remains strict by default; pass `rank(snapshot, { margin: 5 })` to include alternatives. The CLI supplies its source-specific default margin. `frontier(rows, { score, cost })` is the generic Pareto filter, for your own cost model.
 
 ## Attribution
 

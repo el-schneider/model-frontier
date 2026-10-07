@@ -176,6 +176,88 @@ test('the CLI names its data source in text and JSON output', async t => {
   assert.deepEqual(json.models.map(m => m.id), ['m']);
 });
 
+test('margin shows up to three close alternatives per cost tier without relaxing the score floor', () => {
+  const s = snapshot([
+    row('cheap', { intelligence: 40, price: 1 }),
+    row('same-price', { intelligence: 39, price: 1 }),
+    row('near', { intelligence: 38, price: 2 }),
+    row('third', { intelligence: 37, price: 3 }),
+    row('fourth', { intelligence: 36, price: 3 }),
+    row('far', { intelligence: 34, price: 2 }),
+    row('best', { intelligence: 50, price: 4 }),
+    row('best-tie', { intelligence: 49, price: 4 }),
+    row('past-tier', { intelligence: 39, price: 4 }),
+    row('too-pricey', { intelligence: 49, price: 5 }),
+    row('unpriced', { intelligence: 39 }), row('unscored', { price: 1 }),
+  ]);
+  assert.deepEqual(rank(s).models.map(m => m.id), ['cheap', 'best']);
+  assert.deepEqual(rank(s).alternatives, []);
+  const result = rank(s, { margin: 5 });
+  assert.deepEqual(result.alternatives.map(m => [m.id, m.alternativeTo, m.scoreGap]), [
+    ['same-price', 'cheap', 1], ['near', 'cheap', 2], ['third', 'cheap', 3], ['best-tie', 'best', 1],
+  ]);
+  assert.deepEqual(rank(s, { margin: 5, minScore: 39 }).alternatives.map(m => m.id), ['same-price', 'best-tie']);
+  assert.deepEqual(rank(s, { margin: 1 }).alternatives.map(m => m.id), ['same-price', 'best-tie']);
+  assert.match(format(result), /Indented: alternatives within 5 points/);
+  assert.match(format(result), /\n\s+same-price\s+39\.0/);
+  assert.match(format(result), /4 more models omitted/);
+  const styled = format(result, { style: (name, text) => `<${name}>${text}</${name}>` }).split('\n');
+  assert.match(styled.find(line => line.includes('same-price')), /^<dim>.*same-price.*<\/dim>$/);
+  assert.match(styled.find(line => /\bcheap\s+40\.0/.test(line)), /^1\s+cheap/);
+  const requested = rank(s, { margin: 5, models: ['cheap', 'near', 'far', 'best'] });
+  assert.deepEqual(requested.excluded.map(m => m.id), ['far']);
+  assert.deepEqual(rank(snapshot([]), { margin: 5 }).alternatives, []);
+});
+
+test('decimal margins include exact-boundary contenders and expose clean gaps with stable tie ordering', () => {
+  const s = snapshot([row('best', { intelligence: 50.2, price: 1 }),
+    ...['z', 'a', 'Z', 'A'].map(id => row(id, { intelligence: 48.1, price: 1 }))]);
+  assert.deepEqual(rank(s, { margin: 2.1 }).alternatives.map(m => [m.id, m.scoreGap]), [['A', 2.1], ['Z', 2.1], ['a', 2.1]]);
+  assert.deepEqual(rank(s, { margin: 2.09 }).alternatives, []);
+  for (const margin of [-1, NaN, Infinity, '5', null]) assert.throws(() => checkOptions('aa', { margin }), /margin must be a non-negative number/);
+  assert.throws(() => rank(s, { margin: -1 }), /margin must be a non-negative number/);
+});
+
+test('alternatives use the selected coding metric and task-cost or speed axis', () => {
+  const s = snapshot([
+    row('a', { intelligence: 20, coding: 50, taskCost: 1, speed: 300 }),
+    row('b', { intelligence: 80, coding: 47, taskCost: 2, speed: 200 }),
+    row('c', { intelligence: 30, coding: 60, taskCost: 3, speed: 100 }),
+    row('no-coding', { intelligence: 90, taskCost: 2, speed: 200 }),
+  ]);
+  for (const by of ['task-cost', 'speed']) {
+    const result = rank(s, { metric: 'coding', by, margin: 3 });
+    assert.deepEqual(result.models.map(m => m.id), ['a', 'c']);
+    assert.deepEqual(result.alternatives.map(m => [m.id, m.alternativeTo, m.scoreGap]), [['b', 'a', 3]]);
+    assert.deepEqual(result.notYetScored.map(m => m.id), ['no-coding']);
+  }
+});
+
+test('CLI defaults to close contenders on each source and accepts strict or explicit margins', async t => {
+  const dir = await temp(t);
+  await mkdir(join(dir, 'model-frontier'));
+  const aa = [row('a', { intelligence: 40, price: 1 }), row('b', { intelligence: 35, price: 1 }), row('c', { intelligence: 34, price: 1 })];
+  const arena = aa.map((m, i) => ({ ...m, scores: { arena: [1500, 1450, 1449][i] } }));
+  for (const [source, models, margin] of [['aa', aa, 5], ['arena', arena, 50]]) {
+    await writeFile(join(dir, 'model-frontier', `${source}.json`), JSON.stringify(snapshot(models, source)));
+    const run = args => spawnSync(process.execPath, [cli, '--source', source, '--offline', ...args], { encoding: 'utf8', env: { PATH: process.env.PATH, XDG_CACHE_HOME: dir } });
+    const defaults = run(['--json']);
+    assert.equal(defaults.status, 0, defaults.stderr);
+    const result = JSON.parse(defaults.stdout);
+    assert.equal(result.margin, margin);
+    assert.deepEqual(result.models.map(m => m.id), ['a']);
+    assert.deepEqual(result.alternatives.map(m => m.id), ['b']);
+    assert.match(run([]).stdout, new RegExp(`Indented: alternatives within ${margin} points`));
+    assert.deepEqual(JSON.parse(run(['--json', '--margin', '0']).stdout).alternatives, []);
+    assert.deepEqual(JSON.parse(run(['--json', '--margin', String(margin + 1)]).stdout).alternatives.map(m => m.id), ['b', 'c']);
+  }
+  for (const margin of ['-1', 'NaN', 'Infinity', '']) {
+    const bad = spawnSync(process.execPath, [cli, `--margin=${margin}`, '--json'], { encoding: 'utf8', env: { PATH: process.env.PATH, XDG_CACHE_HOME: await temp(t) } });
+    assert.equal(bad.status, 1);
+    assert.match(JSON.parse(bad.stderr).error, /margin/);
+  }
+});
+
 test('a corrupt cache fails loudly instead of being silently replaced', async t => {
   const cache = join(await temp(t), 'aa.json');
   await writeFile(cache, JSON.stringify({ version: 1, source: 'aa', fetchedAt: Date.now(), models: [{ id: 'x' }] }));

@@ -169,7 +169,7 @@ export function frontier(rows, { score, cost }) {
 const axes = { price: r => r.price, 'task-cost': r => r.taskCost, speed: r => r.speed === null ? null : -r.speed };
 
 // Separate from rank so callers can reject bad options before spending API requests.
-export function checkOptions(sourceId, { metric, by = 'price', models: queries, minScore } = {}) {
+export function checkOptions(sourceId, { metric, by = 'price', models: queries, minScore, margin = 0 } = {}) {
   const source = sources[sourceId];
   if (!source) throw Error(`Unknown source: ${sourceId} (expected aa or arena)`);
   metric ??= source.metrics[0];
@@ -178,26 +178,39 @@ export function checkOptions(sourceId, { metric, by = 'price', models: queries, 
   if (!source.axes.includes(by)) throw Error(`--by ${by} needs ARTIFICIAL_ANALYSIS_API_KEY; ${source.name} only has prices`);
   if (queries !== undefined && (!Array.isArray(queries) || queries.some(q => typeof q !== 'string' || !q.trim()))) throw Error('models must be non-empty IDs');
   if (minScore !== undefined && !Number.isFinite(minScore)) throw Error('min-score must be a number');
-  return { metric, by, queries, minScore };
+  if (!Number.isFinite(margin) || margin < 0) throw Error('margin must be a non-negative number');
+  return { metric, by, queries, minScore, margin };
 }
 
 export function rank(snapshot, options = {}) {
   const source = sources[snapshot.source];
-  const { metric, by, queries, minScore } = checkOptions(snapshot.source, options);
+  const { metric, by, queries, minScore, margin } = checkOptions(snapshot.source, options);
   const rows = queries ? snapshot.models.filter(r => queries.some(q => matches(q, r.id))) : snapshot.models;
   const cost = axes[by];
   const scored = rows.filter(r => minScore === undefined || !(r.scores[metric] < minScore));
   const front = frontier(scored, { score: r => r.scores[metric], cost });
+  // A contender belongs to the last frontier row at its cost or less, before the next tier.
+  // Above the final tier there is no cost ceiling, so only contenders at that row's cost qualify.
+  const alternatives = [];
+  if (margin > 0) for (const [i, parent] of front.entries()) {
+    const next = front[i + 1];
+    const gap = r => Math.round((parent.scores[metric] - r.scores[metric]) * 1e6) / 1e6;
+    const candidates = scored.filter(r => !front.includes(r) && Number.isFinite(r.scores[metric]) && Number.isFinite(cost(r))
+      && cost(r) >= cost(parent) && (next ? cost(r) < cost(next) : cost(r) === cost(parent))
+      && gap(r) <= margin);
+    candidates.sort((a, b) => b.scores[metric] - a.scores[metric] || cost(a) - cost(b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    alternatives.push(...candidates.slice(0, 3).map(r => ({ ...r, alternativeTo: parent.id, scoreGap: gap(r) })));
+  }
   // Coding scores lag new releases. Show unscored models that sit on the intelligence frontier of all models.
   const notYetScored = metric === 'coding' ? frontier(rows, { score: r => r.scores.intelligence, cost }).filter(r => r.scores.coding === null) : [];
   const view = r => ({ id: r.id, name: r.name, creator: r.creator, releaseDate: r.releaseDate, score: r.scores[metric], scores: r.scores, price: r.price, taskCost: r.taskCost, speed: r.speed });
-  // A requested model never vanishes without a reason. One entry per query with no variant on the
-  // frontier, for its most informative variant: beaten first, then below the floor, unpriced, unscored.
+  // A requested model never vanishes without a reason. One entry per query with no listed variant,
+  // for its most informative variant: beaten first, then below the floor, unpriced, unscored.
   const score = r => r.scores[metric];
   const status = r => score(r) === null ? 3 : !Number.isFinite(cost(r)) ? 2 : score(r) < minScore ? 1 : 0;
   const excluded = [...new Set(queries)].flatMap(query => {
     const variants = rows.filter(r => matches(query, r.id));
-    if (!variants.length || variants.some(r => front.includes(r))) return [];
+    if (!variants.length || variants.some(r => front.includes(r) || alternatives.some(a => a.id === r.id))) return [];
     const r = variants.sort((a, b) => status(a) - status(b) || (score(b) ?? 0) - (score(a) ?? 0))[0];
     const beater = status(r) === 0 ? front.find(f => score(f) >= score(r)) : null;
     const reason = [`Beaten by ${beater?.name}: scores at least as high ${by === 'speed' ? 'and is at least as fast' : 'at no higher cost'}`, `Below minimum score ${minScore}`,
@@ -207,10 +220,11 @@ export function rank(snapshot, options = {}) {
   return {
     source: snapshot.source,
     attribution: source.attribution,
-    metric, by,
+    metric, by, margin,
     fetchedAt: snapshot.fetchedAt,
     stale: Date.now() - snapshot.fetchedAt >= ttl,
     models: front.map(view),
+    alternatives: alternatives.map(r => ({ ...view(r), alternativeTo: r.alternativeTo, scoreGap: r.scoreGap })),
     notYetScored: notYetScored.map(view),
     excluded,
     unmatched: queries?.filter(q => !snapshot.models.some(r => matches(q, r.id))) ?? [],
@@ -233,18 +247,22 @@ export function format(result, { style = (_, text) => text } = {}) {
   };
   const lines = [
     `${style('bold', `Frontier: ${labels[result.metric]} vs ${labels[result.by]}`)} ${style('dim', `· ${sources[result.source].name}`)}`,
-    style('dim', result.by === 'speed' ? 'Each row is slower and scores higher than the one above.' : 'Each row costs more and scores higher than the one above.'),
+    style('dim', result.by === 'speed' ? 'Each numbered row is slower and scores higher than the one above.' : 'Each numbered row costs more and scores higher than the one above.'),
   ];
+  const alternatives = result.alternatives ?? [];
+  if (result.margin > 0) lines.push(style('dim', `Indented: alternatives within ${result.margin} points in the same ${result.by === 'speed' ? 'speed' : 'cost'} tier (up to three per row).`));
   if (result.stale) lines.push(style('yellow', 'STALE cached data; run model-frontier refresh'));
-  const front = table(result.models.map((r, i) => cells(r, String(i + 1))));
-  lines.push('', style('dim', front[0]), ...front.slice(1));
+  const listed = result.models.flatMap((r, i) => [{ ...r, number: String(i + 1) },
+    ...alternatives.filter(a => a.alternativeTo === r.id).map(a => ({ ...a, name: `  ${a.name}`, number: '' }))]);
+  const front = table(listed.map(r => cells(r, r.number)));
+  lines.push('', style('dim', front[0]), ...front.slice(1).map((line, i) => listed[i].alternativeTo ? style('dim', line) : line));
   if (!result.models.length) lines.push('No rankable models.');
   if (result.notYetScored.length) {
     const rows = table(result.notYetScored.map(r => cells({ ...r, score: r.scores.intelligence }, '')));
     lines.push('', style('bold', 'Not yet scored on coding'), style('dim', 'SCORE is intelligence; no model beats these on intelligence at their cost.'), ...rows.slice(1));
   }
   if (result.excluded.length) lines.push('', style('bold', 'Not on the frontier:'), ...result.excluded.map(r => `  ${r.name}: ${r.reason}`));
-  const footer = [`${result.ranked - result.models.length} more models omitted: each is beaten or matched on score and ${result.by === 'speed' ? 'speed' : 'cost'} by a listed one.`];
+  const footer = [`${result.ranked - result.models.length - alternatives.length} more models omitted: each is beaten or matched on score and ${result.by === 'speed' ? 'speed' : 'cost'} by a listed one.`];
   if (result.unmatched.length) footer.push(`No match: ${result.unmatched.join(', ')}`);
   footer.push(`Data from ${new Date(result.fetchedAt).toISOString()}. Benchmarks, not your task.`, result.attribution);
   lines.push('', ...footer.map(line => style('dim', line)));
